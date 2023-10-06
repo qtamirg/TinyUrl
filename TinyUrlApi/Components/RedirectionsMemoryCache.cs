@@ -11,23 +11,25 @@ namespace TinyUrlApi.Components
         // Cache size should be configurable from a Database or be coming from the AppSettings level and injected. 
         // Only setting as constant to save time.
         private const int CACHE_SIZE = 1024;
-        private const int CONCURRENCY_LEVEL = 1;
+        private const int CONCURRENCY_LEVEL = 5;
 
         private readonly ConcurrentDictionary<string, string> _cachedUrls;
         private readonly ConcurrentQueue<string> _leastRecentlyUsedQueue;
-        private readonly object _lockObject;
+        private readonly Semaphore _semaphoreObject;
 
         public RedirectionsMemoryCache()
         {
             _cachedUrls = new ConcurrentDictionary<string, string>(CONCURRENCY_LEVEL, CACHE_SIZE);
             _leastRecentlyUsedQueue = new ConcurrentQueue<string>();
-            _lockObject = new object();
+            _semaphoreObject = new Semaphore(CONCURRENCY_LEVEL, CONCURRENCY_LEVEL);
         }
 
         public void Add(ShortenedUrlEntry urlEntry)
         {
-            lock (_lockObject)
+            try
             {
+                _semaphoreObject.WaitOne();
+
                 if (_cachedUrls.Count >= CACHE_SIZE)
                 {
                     _leastRecentlyUsedQueue.TryDequeue(out string leastRecentlyUsedKey);
@@ -37,21 +39,31 @@ namespace TinyUrlApi.Components
                 _cachedUrls[urlEntry.ShortUrl] = urlEntry.FullUrl;
                 _leastRecentlyUsedQueue.Enqueue(urlEntry.ShortUrl);
             }
+            finally
+            {
+                _semaphoreObject.Release();
+            }
         }
 
         public string? TryGet(string shortUrl)
         {
-            string? fullUrl = null;
-            lock (_lockObject)
+            try
             {
+                _semaphoreObject.WaitOne();
+
+                string? fullUrl = null;
                 if (_cachedUrls.TryGetValue(shortUrl, out fullUrl))
                 {
                     _leastRecentlyUsedQueue.Enqueue(shortUrl);
                     _leastRecentlyUsedQueue.TryDequeue(out string shortUrlToEvict);
                 }
-            }
 
-            return fullUrl;
+                return fullUrl;
+            }
+            finally
+            {
+                _semaphoreObject.Release();
+            }
         }
     }
 }
